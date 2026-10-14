@@ -62,9 +62,41 @@
     }).filter(o => o.name);
   }
 
+  // 他項權利部：每筆（登記次序）一個區塊
+  const lbl = t => [...t].map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s*');
+  // 同一行可能有兩個欄位（例：登記日期：…  登記原因：設定），取到下一個「標籤：」之前為止
+  const fld = (b, label) => { const m = b.match(new RegExp(lbl(label) + '\\s*[：:]\\s*([^\\n]*?)(?=\\s+[^\\s：:()（）]{2,10}\\s*(?:\\([^)]*\\))?\\s*[：:]|\\n|$)')); return m ? toHalf(m[1]).replace(/[*＊]{2,}/g, ' ').replace(/\s+/g, ' ').trim() : ''; };
+  const multi = (b, label, stops) => { const m = b.match(new RegExp(lbl(label) + '\\s*[：:]\\s*([\\s\\S]*?)(?=' + stops.map(lbl).join('|') + '|$)')); return m ? toHalf(m[1]).replace(/\s+/g, ' ').trim() : ''; };
+  function parseOtherRights(sec) {
+    if (!sec) return [];
+    const parts = sec.split(/（\d{4}）登記次序/).slice(1);
+    return parts.map(b => {
+      const order = toHalf((b.match(/^[：:]\s*([\d-]+)/) || [])[1] || '');
+      const STOP = ['共同擔保建號', '共同擔保地號', '其他登記事項', '證明書字號', '流抵約定', '權利標的'];
+      const amountTxt = fld(b, '擔保債權總金額');
+      return {
+        order,
+        type: (b.match(/權利種類：\s*(\S+)/) || [])[1] || '',
+        year: fld(b, '收件年期'), no: (b.match(/字號：\s*(\S+)/) || [])[1] || '',
+        regDate: fld(b, '登記日期'), reason: fld(b, '登記原因'),
+        holder: fld(b, '權利人'), holderId: fld(b, '統一編號'),
+        ratio: fld(b, '債權額比例'), amount: num(amountTxt), amountText: amountTxt,
+        term: fld(b, '存續期間'), detDate: fld(b, '擔保債權確定期日').replace(/[。.]$/, ''),
+        repay: fld(b, '清償日期').replace(/[。.]$/, ''),
+        target: fld(b, '權利標的'), targetOrder: toHalf((b.match(/標的登記次序：\s*([\d\s-]+)/) || [])[1] || '').trim().split(/\s+/).filter(Boolean),
+        scope: fld(b, '設定權利範圍'), cert: fld(b, '證明書字號'),
+        debtor: multi(b, '債務人及債務額比例', ['權利標的', '標的登記次序', '設定權利範圍', '證明書字號', '擔保債權總金額']),
+        obligor: fld(b, '設定義務人'),
+        coLand: multi(b, '共同擔保地號', STOP.filter(x => x !== '共同擔保地號')),
+        coBldg: multi(b, '共同擔保建號', STOP.filter(x => x !== '共同擔保建號')),
+      };
+    }).filter(x => x.type || x.holder);
+  }
+
   function parseLand(seg, hd) {
     const mark = between(seg, /土地標示部/, /土地所有權部/);
     const own = between(seg, /土地所有權部/, /土地他項權利部|$/);
+    const oth = between(seg, /土地他項權利部/, /$^/);
     const bl = between(mark, /地上建物建號：/, /其他登記事項/);
     return {
       type: 'land', ...hd,
@@ -75,6 +107,7 @@
       zoningRaw: toHalf((mark.match(/使用分區：\s*(\S+)/) || [])[1] || ''),
       buildingsOnLand: (bl.match(/\d{5}-\d{3}/g) || []),
       owners: parseOwners(own),
+      rights: parseOtherRights(oth),
     };
   }
 
@@ -94,8 +127,9 @@
       (_, m, n, r) => { mains.push({ no: m + '-' + n, share: frac(r) }); });
     const usage = ((mark.match(/主要用途：\s*(\S+)/) || [])[1] || '');
     const owners = parseOwners(own);
+    const rights = parseOtherRights(between(seg, /建物他項權利部/, /$^/));
     return {
-      type: 'building', ...hd,
+      type: 'building', ...hd, rights,
       no: hd.main + '-' + hd.sub,
       door: toHalf((mark.match(/建物門牌：\s*([^\n]+)/) || [])[1] || '').trim(),
       sitting, usage,
@@ -254,7 +288,25 @@
     }
     mainB.forEach(b => { if (b.common.length > 2) info.push(`建號 ${b.no} 有 ${b.common.length} 個共有部分，第 3 個起放在工作表最右邊的隱藏欄（點欄位上方的「+」展開），已計入建物總面積`); });
     mainB.forEach(b => { if (!floorLabel(b)) warn.push(`建號 ${b.no}：無法判斷樓層（層次：${b.level}），樓次欄留空`); });
-    return { blocks, lands: L, buildings: B, warn: [...new Set(warn)], info };
+    // 他項權利：同一筆設定（收件年期＋字號）常同時登記在土地與建物上，合併成一筆
+    const rightsMap = new Map();
+    const props = [...L.map(l => ({ p: l, label: `${parseInt(l.parcel, 10)}地號`, kind: 'land', key: landKey(l.section, l.subsection, l.parcel) })), ...B.filter(b => !b.isCommon).map(b => ({ p: b, label: `${bldDisp(b.no)}建號`, kind: 'bldg', key: b.section + b.no }))];
+    for (const { p, label, kind, key: pkey } of props) {
+      const ownerByOrder = new Map(p.owners.map(o => [String(o.order).padStart(4, '0'), o.name]));
+      // 順位：同一標的（同一所有權人持分）上，依登記次序先後
+      const seen = new Map();
+      for (const r of (p.rights || [])) {
+        const tkey = r.targetOrder.join(',') || '*';
+        const rank = (seen.get(tkey) || 0) + 1; seen.set(tkey, rank);
+        const key = (r.year + '|' + r.no) || (p.parcel || p.no) + r.order;
+        const owners = r.targetOrder.map(o => ownerByOrder.get(o.split('-')[0].padStart(4, '0'))).filter(Boolean);
+        const where = { label, kind, key: pkey, owners, scope: r.scope, target: r.target };
+        if (!rightsMap.has(key)) rightsMap.set(key, { ...r, rank, where: [where], firstProp: label });
+        else { const x = rightsMap.get(key); x.where.push(where); x.rank = Math.min(x.rank, rank); }
+      }
+    }
+    const rights = [...rightsMap.values()];
+    return { blocks, lands: L, buildings: B, warn: [...new Set(warn)], info, rights };
   }
 
   // ───────────── 4. 寫入 xlsx（直接改 XML，保留範本格式）─────────────
@@ -297,6 +349,140 @@
       .replace(/(^|[^A-Z$\]!\w])(\$?)([A-Z]{1,3})5(?!\d)/g, (all, pre, d, col) => d ? all : `${pre}${col}{R}`);
   }
 
+  // ───────────── 他項權利表（另一個分頁，所有範本共用）─────────────
+  const rocToSerial = t => { const m = String(t || '').match(/民國\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日/); if (!m) return null; return (Date.UTC(+m[1] + 1911, +m[2] - 1, +m[3]) - Date.UTC(1899, 11, 30)) / 86400000; };
+  const fracShort = t => { const f = frac(t); return f ? `${f.num}/${f.den}` : String(t || '').replace(/\s+/g, ''); };
+  function coText(txt, kind) {
+    if (!txt || /空白/.test(txt)) return '';
+    const groups = []; let cur = null;
+    String(txt).replace(/([^\s\d、，,]+?段(?:[^\s\d、，,]+?小段)?)|(\d{4,5})-(\d{3,4})/g, (m0, sec, a, b) => {
+      if (sec) { cur = { sec, nos: [] }; groups.push(cur); }
+      else if (cur) { const main = parseInt(a, 10), sub = parseInt(b, 10); cur.nos.push(sub ? `${main}-${sub}` : String(main)); }
+    });
+    return groups.filter(g => g.nos.length).map(g => `${kind === 'land' ? '土地' : '建物'}：${g.sec}${g.nos.join('、')}${kind === 'land' ? '地號' : '建號'}`).join('\n');
+  }
+  // 他項權利：跟著各列的地號／建號往右延伸。每筆權利一組欄位，同一列有多筆就再往右加一組。
+  async function appendRightsColumns(zip, sheetPath, rowMeta, rights) {
+    if (!rights.length || !rowMeta.length) return;
+    // 1. 每一筆權利放到哪些列：有建物標的 → 該建號的列；只有土地 → 該所有權人在該地號的第一列
+    const perRow = new Map();
+    const push = (r, x) => { if (!perRow.has(r)) perRow.set(r, []); const arr = perRow.get(r); if (!arr.some(y => y.right === x.right)) arr.push(x); };
+    for (const right of rights) {
+      const bw = right.where.filter(w => w.kind === 'bldg'), lw = right.where.filter(w => w.kind === 'land');
+      let placed = false;
+      for (const w of bw) for (const m of rowMeta) if (m.bldKey === w.key) { push(m.r, { right, scope: [...lw.filter(l => l.owners.some(o => o === m.owner)).map(l => `${l.label} ${fracShort(l.scope)}`), `${w.label} ${fracShort(w.scope)}`].join('；') }); placed = true; }
+      if (!placed) for (const w of lw) for (const m of rowMeta) if (m.landKey === w.key && m.firstOfOwner && w.owners.includes(m.owner)) { push(m.r, { right, scope: `${w.label} ${fracShort(w.scope)}` }); placed = true; }
+      if (!placed) for (const w of lw) { const m = rowMeta.find(x => x.landKey === w.key); if (m) push(m.r, { right, scope: `${w.label} ${w.owners.join('、')} ${fracShort(w.scope)}` }); }
+    }
+    for (const arr of perRow.values()) arr.sort((x, y) => (x.right.regDate || '').localeCompare(y.right.regDate || ''));
+    const groups = Math.max(0, ...[...perRow.values()].map(a => a.length));
+    if (!groups) return;
+
+    // 2. 樣式（附加在既有樣式表之後）
+    let st = await zip.file('xl/styles.xml').async('string');
+    const addTo = (xml, tag, item) => {
+      const re = new RegExp(`<${tag}( count="(\\d+)")?([^>]*)>([\\s\\S]*?)</${tag}>`);
+      const m = xml.match(re); if (!m) return { xml, idx: -1 };
+      const item1 = { fonts: 'font', borders: 'border', cellXfs: 'xf', numFmts: 'numFmt', fills: 'fill' }[tag];
+      const n = (m[4].match(new RegExp(`<${item1}[\\s>/]`, 'g')) || []).length;
+      return { xml: xml.replace(re, `<${tag} count="${n + 1}"${m[3]}>${m[4]}${item}</${tag}>`), idx: n };
+    };
+    const FONT = '<name val="標楷體"/><family val="3"/><charset val="136"/>';
+    let r1 = addTo(st, 'fonts', `<font><b/><sz val="11"/>${FONT}</font>`); st = r1.xml; const fHead = r1.idx;
+    r1 = addTo(st, 'fonts', `<font><sz val="11"/>${FONT}</font>`); st = r1.xml; const fBody = r1.idx;
+    r1 = addTo(st, 'fills', '<fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/><bgColor indexed="64"/></patternFill></fill>'); st = r1.xml; const fillHead = r1.idx;
+    r1 = addTo(st, 'borders', '<border><left style="thin"><color auto="1"/></left><right style="thin"><color auto="1"/></right><top style="thin"><color auto="1"/></top><bottom style="thin"><color auto="1"/></bottom><diagonal/></border>'); st = r1.xml; const bThin = r1.idx;
+    st = st.replace(/<numFmts\b[^>]*\/>/, '');
+    const ids = (st.match(/numFmtId="(\d+)"/g) || []).map(x => +x.match(/\d+/)[0]);
+    const nMoney = Math.max(199, ...ids) + 1, nDate = nMoney + 1;
+    const f1 = `<numFmt numFmtId="${nMoney}" formatCode="&quot;新台幣&quot;#,##0&quot;元&quot;"/>`, f2 = `<numFmt numFmtId="${nDate}" formatCode="[$-404]gge&quot;年&quot;m&quot;月&quot;d&quot;日&quot;;@"/>`;
+    if (/<numFmts/.test(st)) st = addTo(addTo(st, 'numFmts', f1).xml, 'numFmts', f2).xml;
+    else st = st.replace(/(<styleSheet[^>]*>)/, `$1<numFmts count="2">${f1}${f2}</numFmts>`);
+    // 表頭可換行；資料列單行顯示（主表列高固定），欄寬放得下完整內容
+    const AL = (h, wrap) => `<alignment horizontal="${h}" vertical="center"${wrap ? ' wrapText="1"' : ''}/>`;
+    const xf = (numFmt, font, fill, align) => `<xf numFmtId="${numFmt}" fontId="${font}" fillId="${fill}" borderId="${bThin}" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">${align}</xf>`;
+    r1 = addTo(st, 'cellXfs', xf(0, fHead, fillHead, AL('center', true))); st = r1.xml; const sHead = r1.idx;
+    r1 = addTo(st, 'cellXfs', xf(0, fBody, 0, AL('left'))); st = r1.xml; const sText = r1.idx;
+    r1 = addTo(st, 'cellXfs', xf(nMoney, fBody, 0, AL('right'))); st = r1.xml; const sMoney = r1.idx;
+    r1 = addTo(st, 'cellXfs', xf(nDate, fBody, 0, AL('center'))); st = r1.xml; const sDate = r1.idx;
+    zip.file('xl/styles.xml', st);
+
+    // 3. 欄位：每組 10 欄
+    const RANK = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+    const FIELDS = [
+      ['權利種類', 16, x => ({ v: x.right.type })],
+      ['登記次序', 9, x => ({ v: `第${RANK[x.right.rank - 1] || x.right.rank}順位` })],
+      ['權利人', 32, x => ({ v: x.right.holder })],
+      ['權利價值', 23, x => (x.right.amount != null ? { n: x.right.amount, s: sMoney } : { v: x.right.amountText })],
+      ['擔保債權確定期日', 34, x => { const d = rocToSerial(x.right.detDate); if (d != null) return { n: d, s: sDate }; const t = (x.right.term || '').match(/自\s*(\d+)年(\d+)月(\d+)日至\s*(\d+)年(\d+)月(\d+)日/); return { v: t ? `${t[1]}.${t[2]}.${t[3]}～${t[4]}.${t[5]}.${t[6]}（存續期間）` : (x.right.term ? `存續期間${x.right.term}` : '') }; }],
+      ['清償日期', 34, x => ({ v: x.right.repay })],
+      ['登記日期', 17, x => { const d = rocToSerial(x.right.regDate); return d != null ? { n: d, s: sDate } : { v: x.right.regDate }; }],
+      ['登記字號', 20, x => ({ v: x.right.no })],
+      ['登記原因', 9, x => ({ v: x.right.reason })],
+      ['設定權利範圍', 34, x => ({ v: x.scope })],
+    ];
+    let xml = await zip.file(sheetPath).async('string');
+    let maxCol = 0;
+    xml.replace(/<c r="([A-Z]+)\d+"/g, (m0, c) => { maxCol = Math.max(maxCol, colNum(c)); return m0; });
+    const START = maxCol + 2, GW = FIELDS.length;
+    const cx = (ref, style, it) => {
+      if (it && it.n != null) return `<c r="${ref}" s="${it.s ?? style}"><v>${it.n}</v></c>`;
+      if (!it || it.v == null || it.v === '') return `<c r="${ref}" s="${style}"/>`;
+      return `<c r="${ref}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${xesc(it.v)}</t></is></c>`;
+    };
+    const addCells = (rn, cellsXml) => {
+      const re = new RegExp(`<row r="${rn}"([^>]*?)(/>|>([\\s\\S]*?)</row>)`);
+      if (re.test(xml)) xml = xml.replace(re, (m0, at, end, inner) => `<row r="${rn}"${at}>${inner || ''}${cellsXml}</row>`);
+      else {
+        // 該列不存在：依列號插入正確位置
+        const rowsAfter = [...xml.matchAll(/<row r="(\d+)"/g)].find(m => +m[1] > rn);
+        const tag = `<row r="${rn}">${cellsXml}</row>`;
+        xml = rowsAfter ? xml.slice(0, rowsAfter.index) + tag + xml.slice(rowsAfter.index) : xml.replace('</sheetData>', tag + '</sheetData>');
+      }
+    };
+    const merges = [];
+    // 表頭：第 2 列組名、第 3 列欄名（第 3～4 列合併）
+    let h2 = '', h3 = '', h4 = '';
+    for (let g = 0; g < groups; g++) {
+      const a = START + g * GW, z = a + GW - 1;
+      h2 += cx(colName(a) + 2, sHead, { v: `他項權利（${RANK[g] || g + 1}）` }); for (let ci = a + 1; ci <= z; ci++) h2 += `<c r="${colName(ci)}2" s="${sHead}"/>`;
+      merges.push(`${colName(a)}2:${colName(z)}2`);
+      FIELDS.forEach(([lab], k) => { const ci = a + k; h3 += cx(colName(ci) + 3, sHead, { v: lab }); h4 += `<c r="${colName(ci)}4" s="${sHead}"/>`; merges.push(`${colName(ci)}3:${colName(ci)}4`); });
+    }
+    addCells(2, h2); addCells(3, h3); addCells(4, h4);
+    // 資料列
+    for (const m of rowMeta) {
+      const list = perRow.get(m.r) || [];
+      let out = '';
+      for (let g = 0; g < groups; g++) {
+        const x = list[g];
+        FIELDS.forEach(([, , fn], k) => { out += cx(colName(START + g * GW + k) + m.r, sText, x ? fn(x) : null); });
+      }
+      addCells(m.r, out);
+    }
+    // 合併儲存格、欄寬
+    if (/<mergeCells/.test(xml)) xml = xml.replace(/<mergeCells count="(\d+)">([\s\S]*?)<\/mergeCells>/, (m0, n, inner) => `<mergeCells count="${+n + merges.length}">${inner}${merges.map(x => `<mergeCell ref="${x}"/>`).join('')}</mergeCells>`);
+    else xml = xml.replace('</sheetData>', `</sheetData><mergeCells count="${merges.length}">${merges.map(x => `<mergeCell ref="${x}"/>`).join('')}</mergeCells>`);
+    const a0 = START, z0 = START + groups * GW - 1;
+    const newCols = []; for (let ci = a0; ci <= z0; ci++) newCols.push(`<col min="${ci}" max="${ci}" width="${FIELDS[(ci - a0) % GW][1]}" customWidth="1"/>`);
+    if (/<cols>/.test(xml)) {
+      xml = xml.replace(/<cols>([\s\S]*?)<\/cols>/, (all, inner) => {
+        const out = [];
+        (inner.match(/<col [^>]*\/>/g) || []).forEach(c => {
+          const mn = +c.match(/ min="(\d+)"/)[1], mx = +c.match(/ max="(\d+)"/)[1];
+          if (mx < a0 || mn > z0) { out.push([mn, c]); return; }
+          if (mn < a0) out.push([mn, c.replace(/ max="\d+"/, ` max="${a0 - 1}"`)]);
+          if (mx > z0) out.push([z0 + 1, c.replace(/ min="\d+"/, ` min="${z0 + 1}"`)]);
+        });
+        newCols.forEach((c, i) => out.push([a0 + i, c]));
+        out.sort((x, y) => x[0] - y[0]);
+        return `<cols>${out.map(x => x[1]).join('')}</cols>`;
+      });
+    } else xml = xml.replace('<sheetData', `<cols>${newCols.join('')}</cols><sheetData`);
+    xml = xml.replace(/<dimension ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\/>/, (m0, c1, r1x, c2, r2) => `<dimension ref="${c1}${r1x}:${colName(Math.max(colNum(c2), z0))}${r2}"/>`);
+    zip.file(sheetPath, xml);
+  }
+
   // 檔案作者：只換標籤內文字，保留原標籤（含命名空間宣告）
   async function setAuthor(zip, author) {
     if (!author || !zip.file('docProps/core.xml')) return;
@@ -313,9 +499,10 @@
     zip.file('docProps/core.xml', cx);
   }
   // 公式位置變動後移除 calcChain，Excel 開檔會自動重建
-  async function dropCalcChain(zip, wbRels) {
+  async function dropCalcChain(zip) {
     if (!zip.file('xl/calcChain.xml')) return;
     zip.remove('xl/calcChain.xml');
+    const wbRels = await zip.file('xl/_rels/workbook.xml.rels').async('string');  // 讀最新版本（可能已加入他項權利表）
     zip.file('xl/_rels/workbook.xml.rels', wbRels.replace(/<Relationship [^>]*calcChain[^>]*\/>/, ''));
     const ct = await zip.file('[Content_Types].xml').async('string');
     zip.file('[Content_Types].xml', ct.replace(/<Override [^>]*calcChain[^>]*\/>/, ''));
@@ -374,6 +561,7 @@
 
     // 產生每列資料
     const gen = new Map(); // row -> {col: {v, t:'n'|'s'|'f'}}
+    const rowMeta = [];
     const merges = [];
     let r = FIRST_ROW;
     for (const blk of model.blocks) {
@@ -447,6 +635,7 @@
         ['BE', 'BF', 'BG', 'BH', 'BI', 'BJ', 'BK', 'BL', 'BM', 'BN', 'BP', 'BQ', 'BR', 'BS', 'BT', 'BU', 'BV', 'BW', 'BX', 'BY', 'CD'].forEach(fx);
         if (!row.land) { delete d.BX; delete d.BY; }
         gen.set(r, { d, pos });
+        rowMeta.push({ r, landKey: landKey(l.section, l.subsection, l.parcel), owner: row.owner && row.owner.name, bldKey: row.b ? row.b.section + row.b.no : null, firstOfOwner: !!row.land || (row.joint && !row.jointCont) });
         if (cdMerge) merges.push(`CD${r}:CE${r}`);
         r++;
       });
@@ -576,6 +765,7 @@
     let wbx0 = wb.replace(/(<definedName name="_xlnm\.Print_Area"[^>]*>[^<]*?!\$[A-Z]+\$\d+:\$[A-Z]+\$)(\d+)(<\/definedName>)/, (a, pre, n, post) => pre + Math.max(newLast, FIRST_ROW) + post);
     let wbx = wbx0.replace(/<calcPr([^>]*?)\s*\/>/, (a, at) => `<calcPr${at.replace(/ fullCalcOnLoad="[^"]*"/, '')} fullCalcOnLoad="1"/>`);
     zip.file('xl/workbook.xml', wbx);
+    if (opts.rights !== false) await appendRightsColumns(zip, sheetPath, rowMeta, model.rights || []);
     await setAuthor(zip, opts.author);
     await dropCalcChain(zip, wbRels);
     return { buf: await zip.generateAsync({ type: root.document ? 'blob' : 'nodebuffer', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), rows: newLast - FIRST_ROW + 1, oldLast };
@@ -601,7 +791,7 @@
 
     const LAND_COLS = ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'AJ', 'AK', 'AL', 'AM', 'AN', 'AO', 'AP', 'AQ', 'AR'];
     const fmtNum = x => String(Math.round(x * 1e6) / 1e6);
-    const gen = new Map(); const merges = []; const info = [];
+    const gen = new Map(); const merges = []; const info = []; const rowMeta = [];
     // 先算出每個區塊的列數，才能決定合計列位置
     let r = FIRST_ROW;
     const layout = model.blocks.map(blk => { const b0 = r; r += blk.rows.length; return { blk, b0, e: r - 1 }; });
@@ -647,6 +837,7 @@
         f('AG', `AF${rr}*0.3025`); f('AH', `AG${rr}*(1-$AH$4)`);
         put('AS', 5); f('AU', `$AU$4*AG${rr}`); put('AV', 1); f('AW', `V${rr}`);
         gen.set(rr, { d, style: ST[pos], attrs: i === 0 ? RA.first : RA.data });
+        rowMeta.push({ r: rr, landKey: landKey(l.section, l.subsection, l.parcel), owner: row.owner && row.owner.name, bldKey: row.b ? row.b.section + row.b.no : null, firstOfOwner: !!row.land || (row.joint && !row.jointCont) });
         merges.push(`L${rr}:N${rr}`);
       });
       if (e > b0) {
@@ -716,6 +907,7 @@
     let wbx = wb.replace(/(<definedName name="_xlnm\.Print_Area"[^>]*>[^<]*?!\$[A-Z]+\$\d+:\$[A-Z]+\$)(\d+)(<\/definedName>)/, (a, pre, n, post) => pre + T + post)
       .replace(/<calcPr([^>]*?)\s*\/>/, (a, at) => `<calcPr${at.replace(/ fullCalcOnLoad="[^"]*"/, '')} fullCalcOnLoad="1"/>`);
     zip.file('xl/workbook.xml', wbx);
+    if (opts.rights !== false) await appendRightsColumns(zip, sheetPath, rowMeta, model.rights || []);
     await setAuthor(zip, opts.author);
     await dropCalcChain(zip, wbRels);
     return { buf: await zip.generateAsync({ type: root.document ? 'blob' : 'nodebuffer', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), rows: lastData - FIRST_ROW + 1, info };
