@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.xlsx binary
+# dist/ 是 npm run build 產生的檔案，不列入 GitHub 語言統計與 diff
+dist/** linguist-generated=true -diff

@@ -1,0 +1,33 @@
+{
+  "name": "transcript-to-register",
+  "version": "1.0.0",
+  "description": "地政電子謄本 PDF 轉地號清冊 Excel，單一 HTML、離線執行",
+  "author": "Jacky",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.js",
+    "cli": "node scripts/cli.js"
+  },
+  "devDependencies": {
+    "jszip": "3.10.1",
+    "pdfjs-dist": "3.11.174"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JungShianWU/transcript-to-register.git"
+  },
+  "homepage": "https://github.com/JungShianWU/transcript-to-register#readme",
+  "bugs": {
+    "url": "https://github.com/JungShianWU/transcript-to-register/issues"
+  },
+  "keywords": [
+    "謄本",
+    "地號清冊",
+    "地政",
+    "都市更新",
+    "pdf",
+    "xlsx",
+    "offline"
+  ]
+}

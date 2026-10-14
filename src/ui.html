@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="author" content="Jacky">
+<!-- 安全設定：禁止一切網路連線（connect-src 'none'）、不載入任何外部腳本或字型 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; worker-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
+<title>謄本轉地號清冊</title>
+<style>
+  :root{--ink:#1d2421;--muted:#5d6762;--line:#d9dfdb;--bg:#f6f7f5;--card:#fff;--accent:#2f5d50;--accent-soft:#e3eee9;--warn:#8a5a00;--warn-bg:#fff6e0;--err:#9b2c2c;--err-bg:#fdecec}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 "Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif}
+  main{max-width:1040px;margin:0 auto;padding:28px 16px 60px}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 20px}
+  .badge{display:inline-flex;gap:6px;align-items:center;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:3px 12px;font-size:13px;font-weight:600}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0}
+  @media(max-width:720px){.grid{grid-template-columns:1fr}}
+  .drop{background:var(--card);border:1.5px dashed var(--line);border-radius:12px;padding:20px;cursor:pointer;transition:border-color .15s,background .15s;min-height:132px}
+  .drop:hover,.drop.drag{border-color:var(--accent);background:#fbfdfc}
+  .drop h2{font-size:15px;margin:0 0 4px}
+  .drop p{margin:0;color:var(--muted);font-size:13.5px}
+  .drop .files{margin-top:10px;font-size:13px;color:var(--accent);word-break:break-all}
+  .step{display:inline-block;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;text-align:center;line-height:22px;margin-right:6px}
+  button{font:inherit;border:0;border-radius:10px;padding:11px 20px;font-weight:600;cursor:pointer}
+  .primary{background:var(--accent);color:#fff}
+  .primary:disabled{background:#b9c4bf;cursor:not-allowed}
+  .ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  #status{margin:14px 0;font-size:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0}
+  .card h3{margin:0 0 10px;font-size:15px}
+  .warn{background:var(--warn-bg);border-color:#f0d9a6}
+  .warn li{color:var(--warn)}
+  .err{background:var(--err-bg);border-color:#f2c4c4;color:var(--err)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+  th{color:var(--muted);font-weight:600;background:#fafbfa}
+  .wrap{overflow-x:auto}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  td:nth-child(4),td:nth-child(6),th{white-space:nowrap}
+  .ok{color:var(--accent);font-weight:600}
+  ul{margin:0;padding-left:20px}
+  details summary{cursor:pointer;color:var(--muted);font-size:13.5px}
+  .note{font-size:13px;color:var(--muted)}
+  input[type=file]{display:none}
+  .tplbox{cursor:default}
+  .tplopts{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+  .opt{display:flex;gap:8px;align-items:flex-start;padding:7px 10px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-size:13.5px}
+  .opt:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+  .opt input{margin-top:3px;accent-color:var(--accent)}
+  .opt small{color:var(--muted)}
+  .upl{display:block;margin-top:8px;padding:10px;border:1.5px dashed var(--line);border-radius:8px;cursor:pointer;font-size:13px;color:var(--accent);text-align:center}
+  .upl.drag,.upl:hover{border-color:var(--accent)}
+  .foot{margin-top:36px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px;line-height:1.7}
+  .foot h3{font-size:13px;color:var(--ink);margin:12px 0 4px}
+  .foot ul{padding-left:18px}
+  .foot a{color:var(--accent)}
+  .foot .by{margin:14px 0 0}
+  .foot-toggle summary{display:inline-flex;align-items:center;gap:6px;cursor:pointer;list-style:none;border:1px solid var(--line);border-radius:999px;padding:5px 14px;background:var(--card);color:var(--muted);font-size:12.5px;user-select:none}
+  .foot-toggle summary::-webkit-details-marker{display:none}
+  .foot-toggle summary::before{content:'▸';font-size:11px;transition:transform .15s}
+  .foot-toggle[open] summary::before{transform:rotate(90deg)}
+  .foot-toggle summary:hover{border-color:var(--accent);color:var(--accent)}
+  .foot-body{margin-top:6px}
+</style>
+</head>
+<body>
+<main>
+  <h1>謄本轉地號清冊</h1>
+  <p class="sub">讀取地政電子謄本 PDF，依清冊範本產生填好的 Excel。 <span class="badge">● 離線執行・檔案不會離開這台電腦</span></p>
+
+  <div class="grid">
+    <div class="drop tplbox">
+      <h2><span class="step">1</span>選擇範本</h2>
+      <div class="tplopts" id="tplOpts">
+        <label class="opt"><input type="radio" name="tpl" value="author" checked><span><b>作者範本</b>（預設）<br><small>權屬＋分配表：一筆地號一個區塊，每列一位所有權人，含地主分回與補貼試算</small></span></label>
+        <label class="opt"><input type="radio" name="tpl" value="generic"><span><b>通用範本</b><br><small>地號清冊：土地、建物、共有部分逐欄列出，含權利價值與分配比例</small></span></label>
+        <label class="opt"><input type="radio" name="tpl" value="upload"><span><b>上傳自己的範本</b><br><small>需為地號清冊格式（資料從第 5 列開始），格式與公式會保留</small></span></label>
+      </div>
+      <label class="upl" id="dropTpl" style="display:none">
+        <span id="tplName">點這裡選擇範本 .xlsx，或拖曳進來</span>
+        <input type="file" id="tplInput" accept=".xlsx">
+      </label>
+    </div>
+    <label class="drop" id="dropPdf">
+      <h2><span class="step">2</span>謄本 PDF（可多選）</h2>
+      <p>土地謄本＋建物謄本（含共有部分），一份或多份皆可，可直接拖曳進來。</p>
+      <div class="files" id="pdfNames"></div>
+      <input type="file" id="pdfInput" accept=".pdf,application/pdf" multiple>
+    </label>
+  </div>
+
+  <div class="bar">
+    <button class="primary" id="runBtn" disabled>產生清冊</button>
+    <button class="ghost" id="dlBtn" style="display:none">下載 Excel</button>
+    <button class="ghost" id="resetBtn" style="display:none">清除重來</button>
+  </div>
+  <div id="status"></div>
+  <div id="out"></div>
+
+  <details class="card" style="margin-top:28px">
+    <summary>填寫規則</summary>
+    <ul class="note" style="margin-top:8px">
+      <li><b>作者範本</b>：一筆地號一個區塊，地號、面積、公告現值等跨區塊合併；每列一位所有權人。土地持分（V）＝土地坪數 × 權利範圍；主建物、附屬建物、共有（公設）以算式寫出，共有部分不論幾筆都加總在同一格。公告地價與右側分回、補貼的參數（第 2、4 列）請自行填入。</li>
+      <li><b>通用範本／自有範本</b>：每筆土地一個區塊，依該地號的所有權人逐列排；同一人有多戶建物時，第二戶起另起一列，土地持分只算一次（留空）。</li>
+      <li>建物依「建物坐落地號」歸到土地；所有權人不在土地所有權部的建物，列在該區塊最後。</li>
+      <li>共有部分依各主建物謄本上的權利範圍填入：前兩個放在 AO～AT、AU～AZ，第 3 個以後放在工作表最右邊的隱藏欄（點欄位上方「+」展開），全部計入建物總面積；共有部分本身不另列。建物為部分持有時，共有部分持分會一併乘上建物持分。</li>
+      <li>附屬建物：騎樓→W、陽臺等→AB、平台→AG、夾層→AI、屋突→AK、防空避難室→AM。</li>
+      <li>立體價差（BD）預設 1，請依案件自行調整。權利價值部之後的公式沿用範本，範本本身連到外部檔案的 #REF! 不會修正。</li>
+      <li>只支援有文字層的電子謄本；掃描檔無法辨識。所有權人住址在電子謄本中是圖片，不會讀取。</li>
+    </ul>
+  </details>
+  <footer class="foot">
+    <details class="foot-toggle">
+      <summary>聲明與來源</summary>
+      <div class="foot-body">
+    <h3>聲明</h3>
+    <ul>
+      <li><b>僅供作業輔助：</b>本工具依謄本文字自動整理，結果僅供參考。正式使用前，請以地政機關核發之謄本正本核對所有權人、權利範圍與面積；因辨識或對應錯誤所生之損失，使用者應自行負責。</li>
+      <li><b>隱私：</b>本工具完全在本機瀏覽器內執行，不連線網路、不上傳任何檔案、不使用 Cookie 或本機儲存；頁面已以 Content-Security-Policy 禁止所有對外連線。</li>
+      <li><b>適用範圍：</b>僅支援具文字層之地政電子謄本；掃描檔、影像檔無法辨識。電子謄本中以圖片呈現的住址不會讀取。</li>
+    </ul>
+    <h3>來源</h3>
+    <ul>
+      <li><b>資料來源：</b>使用者自行提供之地政電子謄本（土地登記第二類謄本、建物登記第二類謄本）。</li>
+      <li><b>開源元件：</b>
+        pdf.js 3.11.174（Copyright Mozilla Foundation，Apache License 2.0，<a href="https://github.com/mozilla/pdf.js" target="_blank" rel="noopener noreferrer">github.com/mozilla/pdf.js</a>）；
+        JSZip 3.10.1（Copyright Stuart Knightley 等，MIT License，<a href="https://github.com/Stuk/jszip" target="_blank" rel="noopener noreferrer">github.com/Stuk/jszip</a>），內含 pako（MIT License）。
+        以上元件已內嵌於本檔，執行時不會連線取得。</li>
+    </ul>
+    <p class="by">作者：Jacky　・　與 Anthropic 的 AI 助理 Claude 協作開發　・　版本 1.0.0</p>
+      </div>
+    </details>
+  </footer>
+</main>
+
+<script>/*__PDFJS__*/</script>
+<script>/*__PDFWORKER__*/</script>
+<script>/*__JSZIP__*/</script>
+<script>/*__CORE__*/</script>
+<script>
+(function(){
+  'use strict';
+  var C = window.TranscriptCore;
+  var AUTHOR = 'Jacky';
+  // 內建範本：作者範本（權屬+分配表）、通用範本（地號清冊）
+  var AUTHOR_TEMPLATE_B64 = '__AUTHOR_B64__';
+  var GENERIC_TEMPLATE_B64 = '__GENERIC_B64__';
+  var tplMode = 'author';
+  function b64ToBuf(b64){ var bin = atob(b64), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; }
+  var tplFile = null, pdfFiles = [], resultBlob = null, resultName = '';
+  var $ = function(id){ return document.getElementById(id); };
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function status(html, cls){ $('status').innerHTML = html ? '<div class="card ' + (cls||'') + '">' + html + '</div>' : ''; }
+  function refresh(){
+    $('tplName').textContent = tplFile ? '✓ ' + tplFile.name + '（點這裡更換）' : '點這裡選擇範本 .xlsx，或拖曳進來';
+    $('dropTpl').style.display = tplMode === 'upload' ? '' : 'none';
+    $('pdfNames').innerHTML = pdfFiles.map(function(f){ return '✓ ' + esc(f.name); }).join('<br>');
+    $('runBtn').disabled = !pdfFiles.length || (tplMode === 'upload' && !tplFile);
+  }
+  function addPdfs(list){
+    Array.prototype.forEach.call(list, function(f){
+      if (/\.pdf$/i.test(f.name) && !pdfFiles.some(function(x){ return x.name === f.name && x.size === f.size; })) pdfFiles.push(f);
+      if (/\.xlsx$/i.test(f.name)) { tplFile = f; tplMode = 'upload'; setRadio(); }
+    });
+    refresh();
+  }
+  function setRadio(){ Array.prototype.forEach.call(document.querySelectorAll('input[name=tpl]'), function(r){ r.checked = r.value === tplMode; }); }
+  $('tplOpts').addEventListener('change', function(e){ if (e.target.name === 'tpl') { tplMode = e.target.value; refresh(); } });
+  $('tplInput').addEventListener('change', function(e){ if (e.target.files[0]) { tplFile = e.target.files[0]; refresh(); } });
+  $('pdfInput').addEventListener('change', function(e){ addPdfs(e.target.files); e.target.value = ''; });
+  ['dropTpl','dropPdf'].forEach(function(id){
+    var el = $(id);
+    ['dragenter','dragover'].forEach(function(ev){ el.addEventListener(ev, function(e){ e.preventDefault(); el.classList.add('drag'); }); });
+    ['dragleave','drop'].forEach(function(ev){ el.addEventListener(ev, function(e){ e.preventDefault(); el.classList.remove('drag'); }); });
+    el.addEventListener('drop', function(e){
+      var fs = e.dataTransfer.files;
+      if (id === 'dropTpl' && fs[0] && /\.xlsx$/i.test(fs[0].name)) { tplFile = fs[0]; refresh(); }
+      else addPdfs(fs);
+    });
+  });
+  $('resetBtn').addEventListener('click', function(){
+    tplFile = null; tplMode = 'author'; setRadio(); pdfFiles = []; resultBlob = null; $('out').innerHTML = ''; status('');
+    $('dlBtn').style.display = 'none'; $('resetBtn').style.display = 'none'; refresh();
+  });
+  $('dlBtn').addEventListener('click', function(){
+    if (!resultBlob) return;
+    var url = URL.createObjectURL(resultBlob), a = document.createElement('a');
+    a.href = url; a.download = resultName; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+  });
+
+  $('runBtn').addEventListener('click', async function(){
+    $('runBtn').disabled = true; $('out').innerHTML = '';
+    status('辨識中…');
+    try {
+      var items = [], warn = [];
+      for (var i = 0; i < pdfFiles.length; i++) {
+        status('讀取 ' + esc(pdfFiles[i].name) + '（' + (i+1) + '/' + pdfFiles.length + '）…');
+        var meta = {};
+        var text = await C.pdfText(window.pdfjsLib, new Uint8Array(await pdfFiles[i].arrayBuffer()), meta);
+        var r = C.parseText(text, pdfFiles[i].name, meta);
+        items = items.concat(r.items); warn = warn.concat(r.warn);
+      }
+      var model = C.buildModel(items);
+      warn = warn.concat(model.warn); var info = model.info || [];
+      if (!model.blocks.length) throw new Error(warn.length ? warn.join('\n') : '沒有讀到任何土地謄本。清冊以地號為單位，至少需要一份土地謄本。');
+      status('寫入清冊…');
+      var res;
+      if (tplMode === 'author') res = await C.fillAuthorWorkbook(window.JSZip, b64ToBuf(AUTHOR_TEMPLATE_B64), model, { author: AUTHOR });
+      else if (tplMode === 'generic') res = await C.fillWorkbook(window.JSZip, b64ToBuf(GENERIC_TEMPLATE_B64), model, { author: AUTHOR });
+      else res = await C.fillWorkbook(window.JSZip, await tplFile.arrayBuffer(), model, { author: AUTHOR });
+      if (tplMode === 'author') info = info.filter(function(x){ return !/隱藏欄/.test(x); }).concat(res.info || []);
+      resultBlob = res.buf;
+      var l0 = model.lands[0];
+      resultName = (tplMode === 'author' ? '權屬分配表_' : '地號清冊_') + l0.section + l0.subsection + parseInt(l0.parcel, 10) + '地號' + (model.lands.length > 1 ? '等' + model.lands.length + '筆' : '') + '.xlsx';
+      render(model, items, warn, res, info);
+      status('<span class="ok">✓ 完成</span>：土地 ' + model.lands.length + ' 筆、建物 ' + model.buildings.filter(function(b){return !b.isCommon;}).length + ' 戶、共有部分 ' + model.buildings.filter(function(b){return b.isCommon;}).length + ' 筆，共寫入 ' + res.rows + ' 列（第 5～' + (4 + res.rows) + ' 列）。' + (warn.length ? '有 <b>' + warn.length + '</b> 項需要確認，請看下方。' : '檢核全部通過。'));
+      $('dlBtn').style.display = ''; $('resetBtn').style.display = '';
+    } catch (e) {
+      status('<b>無法產生清冊</b><br>' + esc(e && e.message || e).replace(/\n/g, '<br>'), 'err');
+    } finally { $('runBtn').disabled = !pdfFiles.length; }
+  });
+
+  function fracTxt(f){ return f ? f.num + '/' + f.den : ''; }
+  function render(model, items, warn, res, info){
+    var h = '';
+    if (info && info.length) h += '<div class="card"><h3>特殊持有方式（已自動處理）</h3><ul>' + info.map(function(w){ return '<li>' + esc(w) + '</li>'; }).join('') + '</ul></div>';
+    if (warn.length) h += '<div class="card warn"><h3>需要確認（' + warn.length + '）</h3><ul>' + warn.map(function(w){ return '<li>' + esc(w) + '</li>'; }).join('') + '</ul></div>';
+    model.blocks.forEach(function(b){
+      var l = b.land, sum = l.shareSum;
+      h += '<div class="card"><h3>' + esc(l.township + l.section + l.subsection + ' ' + parseInt(l.parcel,10) + ' 地號') +
+        ' <span class="note">面積 ' + esc(l.area) + ' ㎡・公告現值 ' + esc(l.landValue) + ' 元/㎡・持分合計 ' +
+        (Math.abs(sum-1) < 1e-9 ? '<span class="ok">1 ✓</span>' : '<b style="color:#9b2c2c">' + sum.toFixed(6) + '</b>') + '</span></h3>' +
+        '<div class="wrap"><table><thead><tr><th>所有權人</th><th>統一編號</th><th class="num">土地持分</th><th>建號</th><th>門牌</th><th>樓次</th><th class="num">主建物㎡</th><th>附屬建物</th><th>共有部分</th></tr></thead><tbody>' +
+        b.rows.map(function(r){
+          var bd = r.b;
+          return '<tr><td>' + esc(r.owner ? r.owner.name : '') + '</td><td>' + esc(r.owner ? r.owner.id : '') + '</td><td class="num">' + esc(r.joint ? (r.jointCont ? '〃（同上公同共有）' : '公同共有 ' + fracTxt(r.land)) : fracTxt(r.land)) + '</td>' +
+            '<td>' + esc(bd ? bd.no : '') + (bd && r.bshare && r.bshare.num !== r.bshare.den ? '（持分 ' + fracTxt(r.bshare) + '）' : '') + '</td><td>' + esc(bd ? bd.door : '') + '</td><td>' + esc(bd ? (C.floorLabel(bd) + '/' + (bd.floors||'')) : '') + '</td>' +
+            '<td class="num">' + esc(bd ? bd.area : '') + '</td><td>' + esc(bd ? bd.annex.map(function(a){ return a.usage + ' ' + a.area; }).join('、') : '') + '</td>' +
+            '<td>' + esc(bd ? bd.common.map(function(c){ return parseInt(c.no,10) + '：' + fracTxt(c.share); }).join('、') : '') + '</td></tr>';
+        }).join('') + '</tbody></table></div></div>';
+    });
+    $('out').innerHTML = h;
+  }
+  refresh();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+node_modules/
+
+# 謄本與產出的清冊含個資，一律不進版控
+*.pdf
+*.xlsx
+!template/*.xlsx
+
+.DS_Store
+Thumbs.db
