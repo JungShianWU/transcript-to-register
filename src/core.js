@@ -526,6 +526,8 @@
     const byCol = r => { const m = {}; (sh.rows.get(r) || { cells: [] }).cells.forEach(c => { m[c.col] = c; }); return m; };
     const T = { first: byCol(5), mid: byCol(6), last: byCol(11) };
     const row5Attrs = sh.rows.get(5).attrs;
+    // 這份範本實際使用的資料欄範圍（第 5、6、11 列樣板列出現的最後一欄，最多到 CE）
+    const DATA_LAST = Math.min(LASTCOL, Math.max(colNum('BC'), ...['first', 'mid', 'last'].flatMap(k => Object.keys(T[k]).map(colNum))));
     // 第 5 列公式與常數
     const F = {}, CONST = {};
     for (const [col, c] of Object.entries(T.first)) {
@@ -552,7 +554,7 @@
     // 共有部分欄位標題
     const slotNos = [new Set(), new Set()];
     // 第 3 個以後的共有部分：放在工作表目前用到的最後一欄之後（不碰右側試算區），每組 7 欄
-    let maxUsedCol = LASTCOL;
+    let maxUsedCol = DATA_LAST;
     for (const [, row] of sh.rows) for (const c of row.cells) maxUsedCol = Math.max(maxUsedCol, colNum(c.col));
     const EXTRA_START = maxUsedCol + 2, EXTRA_W = 7;
     const extraCols = g => { const b = EXTRA_START + g * EXTRA_W; return ['no', 'area', 'num', 'sl', 'den', 'm2', 'ping'].reduce((o, k, i) => (o[k] = colName(b + i), o), {}); };
@@ -660,7 +662,7 @@
       const cells = [];
       if (g) {
         const tpl = T[g.pos];
-        for (let ci = 1; ci <= LASTCOL; ci++) {
+        for (let ci = 1; ci <= DATA_LAST; ci++) {
           const col = colName(ci);
           const style = cellStyle(tpl[col]) || cellStyle(T.first[col]);
           cells.push({ col, xml: cellXml(col + rr, style, g.d[col]) });
